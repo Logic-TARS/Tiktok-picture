@@ -29,6 +29,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "publish_interval_seconds": 90,
     "force_9x16_upload": False,
     "force_9x16_mode": "blur_background",
+    "mixed_video_effect": "motion_fade",
     "upload_selector": "input[type='file']",
     "caption_selector": "",
     "title_selector": "",
@@ -131,6 +132,9 @@ def save_config(payload: dict[str, Any]) -> dict[str, Any]:
                 value = bool(value)
             if key == "force_9x16_mode":
                 if value not in {"blur_background", "crop_center"}:
+                    value = DEFAULT_CONFIG[key]
+            if key == "mixed_video_effect":
+                if value not in {"none", "fade", "motion", "motion_fade"}:
                     value = DEFAULT_CONFIG[key]
             current[key] = value
     CONFIG_PATH.write_text(

@@ -119,6 +119,12 @@ select {
   margin-bottom: 12px;
 }
 
+.mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
 main {
   padding: 22px;
 }
@@ -619,6 +625,10 @@ td {
   }
 
   .split {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-grid {
     grid-template-columns: 1fr;
   }
 

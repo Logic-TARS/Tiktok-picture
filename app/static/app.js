@@ -17,6 +17,7 @@ const fields = [
   "hashtags_count",
   "force_9x16_upload",
   "force_9x16_mode",
+  "mixed_video_effect",
   "upload_selector",
   "title_selector",
   "caption_selector",
@@ -34,7 +35,6 @@ const state = {
   ui: {
     creatingJobs: false,
     uploadingMaterials: false,
-    lastGroupSize: 4,
   },
 };
 
@@ -43,7 +43,7 @@ function $(id) {
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
@@ -93,7 +93,6 @@ function setButtonLoading(buttonId, loadingText, isLoading) {
     button.dataset.defaultText = button.textContent;
   }
   button.disabled = isLoading;
-  button.classList.toggle("loading", isLoading);
   button.textContent = isLoading ? loadingText : button.dataset.defaultText;
 }
 
@@ -139,35 +138,56 @@ function statusClassName(status) {
 function summarizeJobError(job) {
   const raw = (job.error_message || "").trim();
   if (!raw) return "";
-  if (raw.includes("单文件上传控件")) {
-    return raw;
-  }
-  if (raw.includes("single file")) {
-    return "当前命中的是单文件上传控件，不是图集上传入口。";
-  }
+  if (raw.includes("图集上传入口")) return raw;
+  if (raw.includes("视频上传控件")) return raw;
   if (raw.toLowerCase().includes("timeout")) {
-    return "等待抖音页面超时，请确认当前账号仍处于登录状态。";
+    return "等待抖音创作者中心页面超时，请确认当前账号仍处于登录状态。";
   }
   return raw;
 }
 
+function isMixedVideoJob(job) {
+  if ((job.material_type || "") !== "video") {
+    return false;
+  }
+  const firstPath = String((job.material_paths || [])[0] || "").replaceAll("/", "\\").toLowerCase();
+  return firstPath.includes("\\data\\outputs\\mixed_") || firstPath.endsWith(".mp4") && firstPath.includes("\\data\\outputs\\");
+}
+
+function materialKindLabel(job) {
+  if ((job.material_type || "") === "image_gallery") {
+    return "图集";
+  }
+  if ((job.material_type || "") === "video") {
+    return isMixedVideoJob(job) ? "混剪视频" : "本地视频";
+  }
+  return job.material_type || "未知类型";
+}
+
+function materialCountLabel(job) {
+  if ((job.material_type || "") === "image_gallery") {
+    return `${(job.material_paths || []).length} 张图`;
+  }
+  if ((job.material_type || "") === "video") {
+    return isMixedVideoJob(job) ? "1 个混剪视频" : "1 个本地视频";
+  }
+  return `${(job.material_paths || []).length} 个`;
+}
+
 function applyModelValue(value) {
   const model = (value || "").trim() || "deepseek-v4-flash";
-  const select = $("deepseek_model_select");
-  const customWrap = $("deepseek_model_custom_wrap");
-  const customInput = $("deepseek_model");
   const isPreset = presetModels.includes(model);
-  select.value = isPreset ? model : "__custom__";
-  customInput.value = model;
-  customWrap.classList.toggle("hidden", isPreset);
+  $("deepseek_model_select").value = isPreset ? model : "__custom__";
+  $("deepseek_model").value = model;
+  $("deepseek_model_custom_wrap").classList.toggle("hidden", isPreset);
 }
 
 function getSelectedModelValue() {
-  const value = $("deepseek_model_select").value;
-  if (value === "__custom__") {
+  const selectValue = $("deepseek_model_select").value;
+  if (selectValue === "__custom__") {
     return $("deepseek_model").value.trim() || "deepseek-v4-flash";
   }
-  return value;
+  return selectValue;
 }
 
 function update9x16ModeUi() {
@@ -178,11 +198,40 @@ function getCurrentGroupSize() {
   return Math.max(1, Number($("group_size").value || 4));
 }
 
+function getPublishType() {
+  return $("publish_type").value;
+}
+
+function getVideoSource() {
+  return $("video_source").value;
+}
+
+function getMixedVideoEffect() {
+  return $("mixed_video_effect").value;
+}
+
+function updateMixedVideoEffectUi() {
+  const showEffect = getPublishType() === "video" && getVideoSource() === "mix_from_images";
+  $("mixed_video_effect_wrap").classList.toggle("hidden", !showEffect);
+}
+
+function updatePublishTypeUi() {
+  const publishType = getPublishType();
+  const videoMode = publishType === "video";
+  $("video_source_wrap").classList.toggle("hidden", !videoMode);
+  updateMixedVideoEffectUi();
+  updateCreateButtonLabel();
+  renderScan();
+}
+
 function updateCreateButtonLabel() {
-  const groupSize = getCurrentGroupSize();
-  state.ui.lastGroupSize = groupSize;
   const button = $("createJobsBtn");
-  button.textContent = `创建 ${groupSize} 图任务`;
+  const publishType = getPublishType();
+  if (publishType === "video") {
+    button.textContent = getVideoSource() === "mix_from_images" ? "创建混剪视频任务" : "创建视频任务";
+    return;
+  }
+  button.textContent = `创建 ${getCurrentGroupSize()} 图任务`;
 }
 
 function saveSelectionMemory(selection) {
@@ -210,29 +259,52 @@ function renderSelectionSummary() {
     <div class="selection-title">${escapeHtml(state.selection.source_label || "已选择素材")}</div>
     <div class="selection-meta">
       <span>${state.selection.images_count || 0} 张图片</span>
-      <span>${state.selection.groups_count || 0} 组任务</span>
-      <span>当前按 ${state.selection.group_size || getCurrentGroupSize()} 张分组</span>
+      <span>${state.selection.videos_count || 0} 个视频</span>
+      <span>${state.selection.groups_count || 0} 组图片</span>
     </div>
   `;
 }
 
 function renderScan() {
-  if (!state.scan) return;
-  $("scanSummary").textContent = `${state.scan.images.length} 张图片，${state.scan.groups.length} 组，${state.scan.unsupported.length} 个不支持文件`;
-  const list = $("groupsList");
-  list.innerHTML = "";
-  for (const [index, group] of state.scan.groups.entries()) {
-    const item = document.createElement("div");
-    item.className = "group-item";
-    item.innerHTML = `
-      <strong>第 ${index + 1} 组 · ${group.paths.length} 张${group.is_full_group ? "" : " · 不足一组"}</strong>
-    `;
-    for (const path of group.paths) {
+  const scan = state.scan;
+  if (!scan) {
+    $("scanSummary").textContent = "";
+    $("groupsList").innerHTML = "";
+    return;
+  }
+
+  const publishType = getPublishType();
+  const videoSource = getVideoSource();
+  const groupsList = $("groupsList");
+  groupsList.innerHTML = "";
+
+  $("scanSummary").textContent = `${scan.images.length} 张图片，${scan.videos.length} 个视频，${scan.image_groups.length} 组图片`;
+
+  if (publishType === "video" && videoSource === "direct_video") {
+    for (const [index, item] of (scan.video_items || []).entries()) {
+      const row = document.createElement("div");
+      row.className = "group-item";
+      row.innerHTML = `<strong>第 ${index + 1} 个视频</strong>`;
+      item.paths.forEach((path) => {
+        const line = document.createElement("span");
+        line.textContent = path.split(/[\\/]/).slice(-2).join(" / ");
+        row.appendChild(line);
+      });
+      groupsList.appendChild(row);
+    }
+    return;
+  }
+
+  for (const [index, group] of (scan.image_groups || []).entries()) {
+    const row = document.createElement("div");
+    row.className = "group-item";
+    row.innerHTML = `<strong>第 ${index + 1} 组 · ${group.paths.length} 张${group.is_full_group ? "" : " · 不足一组"}</strong>`;
+    group.paths.forEach((path) => {
       const line = document.createElement("span");
       line.textContent = path.split(/[\\/]/).slice(-2).join(" / ");
-      item.appendChild(line);
-    }
-    list.appendChild(item);
+      row.appendChild(line);
+    });
+    groupsList.appendChild(row);
   }
 }
 
@@ -242,10 +314,9 @@ function setSelectionFromScan(scanResult, meta = {}) {
     upload_dir: meta.upload_dir || scanResult.upload_dir,
     source_label: meta.source_label || scanResult.source_label || "已选择素材",
     images_count: scanResult.images.length,
-    groups_count: scanResult.groups.length,
-    saved_count: meta.saved_count || scanResult.images.length,
+    videos_count: scanResult.videos.length,
+    groups_count: scanResult.image_groups.length,
     group_size: scanResult.group_size,
-    remembered_at: new Date().toISOString(),
   };
   saveSelectionMemory(state.selection);
   $("restoreSelectionBtn").classList.remove("hidden");
@@ -278,7 +349,7 @@ async function loadConfig() {
   }
   applyModelValue(state.config.deepseek_model || "deepseek-v4-flash");
   update9x16ModeUi();
-  updateCreateButtonLabel();
+  updatePublishTypeUi();
 }
 
 async function saveConfig() {
@@ -294,7 +365,7 @@ async function saveConfig() {
     body: JSON.stringify(payload),
   });
   update9x16ModeUi();
-  updateCreateButtonLabel();
+  updatePublishTypeUi();
   showToast("success", "配置已保存", `当前模型：${state.config.deepseek_model}`);
   log("配置已保存");
   await loadHealth();
@@ -302,9 +373,10 @@ async function saveConfig() {
 
 async function uploadMaterials(files, label) {
   if (!files.length) {
-    setCreateFeedback("warning", "还没有选中素材", "请先选择文件夹或图片。");
+    setCreateFeedback("warning", "还没有选中素材", "请先选择文件夹或文件。");
     return;
   }
+
   const formData = new FormData();
   formData.append("group_size", String(getCurrentGroupSize()));
   formData.append("source_label", label);
@@ -314,7 +386,7 @@ async function uploadMaterials(files, label) {
 
   state.ui.uploadingMaterials = true;
   setButtonLoading("pickFolderBtn", "正在导入文件夹...", true);
-  setButtonLoading("pickFilesBtn", "正在导入图片...", true);
+  setButtonLoading("pickFilesBtn", "正在导入文件...", true);
   setCreateFeedback("info", "正在导入素材", `已选 ${files.length} 个文件，正在复制到本地工作目录。`);
 
   try {
@@ -324,11 +396,14 @@ async function uploadMaterials(files, label) {
     setSelectionFromScan(data, {
       upload_dir: data.upload_dir,
       source_label: label,
-      saved_count: data.saved_count,
     });
-    setCreateFeedback("success", "素材已导入", `${data.images.length} 张图片，已按 ${data.group_size} 张分成 ${data.groups.length} 组。`);
-    showToast("success", "素材已导入", `${data.images.length} 张图片`);
-    log(`素材导入完成：${data.images.length} 张图片，${data.groups.length} 组`);
+    setCreateFeedback(
+      "success",
+      "素材已导入",
+      `${data.images.length} 张图片，${data.videos.length} 个视频，${data.image_groups.length} 组图片。`
+    );
+    showToast("success", "素材已导入", `${data.images.length} 张图片，${data.videos.length} 个视频`);
+    log(`素材导入完成：${data.images.length} 张图片，${data.videos.length} 个视频`);
   } catch (error) {
     setCreateFeedback("error", "导入素材失败", error.message || "请重试。");
     showToast("error", "导入素材失败", error.message);
@@ -336,7 +411,7 @@ async function uploadMaterials(files, label) {
   } finally {
     state.ui.uploadingMaterials = false;
     setButtonLoading("pickFolderBtn", "正在导入文件夹...", false);
-    setButtonLoading("pickFilesBtn", "正在导入图片...", false);
+    setButtonLoading("pickFilesBtn", "正在导入文件...", false);
   }
 }
 
@@ -351,7 +426,7 @@ async function rescanSelection({ silent = false } = {}) {
 
   const groupSize = getCurrentGroupSize();
   if (!silent) {
-    setCreateFeedback("info", "正在重新分组", `按 ${groupSize} 张一组重新扫描当前素材。`);
+    setCreateFeedback("info", "正在重新扫描", `按 ${groupSize} 张一组重新扫描当前素材。`);
   }
 
   const data = await api("/api/materials/scan", {
@@ -363,10 +438,14 @@ async function rescanSelection({ silent = false } = {}) {
   });
   setSelectionFromScan(data, state.selection);
   if (!silent) {
-    setCreateFeedback("success", "重新分组完成", `当前共有 ${data.groups.length} 组任务。`);
-    showToast("success", "重新分组完成", `${data.groups.length} 组任务`);
+    setCreateFeedback(
+      "success",
+      "重新扫描完成",
+      `${data.images.length} 张图片，${data.videos.length} 个视频，${data.image_groups.length} 组图片。`
+    );
+    showToast("success", "重新扫描完成");
   }
-  log(`重新扫描完成：按 ${groupSize} 张分组，共 ${data.groups.length} 组`);
+  log(`重新扫描完成：${data.images.length} 张图片，${data.videos.length} 个视频`);
   return data;
 }
 
@@ -382,63 +461,108 @@ async function restoreLastSelection() {
 }
 
 async function ensureScanMatchesGroupSize() {
-  const currentGroupSize = getCurrentGroupSize();
   if (!state.scan) return null;
-  if (Number(state.scan.group_size) === currentGroupSize) {
+  if (Number(state.scan.group_size) === getCurrentGroupSize()) {
     return state.scan;
   }
-  setCreateFeedback("info", "分组数已变更", `已从 ${state.scan.group_size} 张改为 ${currentGroupSize} 张，正在重新分组。`);
-  return rescanSelection({ silent: false });
+  setCreateFeedback("info", "分组数已变更", `已改为 ${getCurrentGroupSize()} 张一组，正在重新分组。`);
+  return rescanSelection();
+}
+
+function getTaskSourceItems() {
+  if (!state.scan) {
+    return [];
+  }
+
+  const publishType = getPublishType();
+  if (publishType === "video") {
+    if (getVideoSource() === "mix_from_images") {
+      return state.scan.image_groups || [];
+    }
+    return state.scan.video_items || [];
+  }
+  return state.scan.image_groups || [];
+}
+
+function getTaskValidationError() {
+  if (!state.scan) {
+    return "请先导入素材。";
+  }
+  const publishType = getPublishType();
+  if (publishType === "video") {
+    if (getVideoSource() === "mix_from_images" && !(state.scan.image_groups || []).length) {
+      return "当前没有可用于混剪的视频图片组。";
+    }
+    if (getVideoSource() === "direct_video" && !(state.scan.video_items || []).length) {
+      return "当前没有可直接发布的视频文件。";
+    }
+    return "";
+  }
+  if (!(state.scan.image_groups || []).length) {
+    return "当前没有可创建图集任务的图片分组。";
+  }
+  return "";
 }
 
 async function createJobs() {
   if (state.ui.creatingJobs) return;
-  if (!state.scan || !state.scan.groups.length) {
-    setCreateFeedback("warning", "还没有可创建的任务", "请先导入素材。");
-    showToast("warning", "还没有可创建的任务");
+
+  await ensureScanMatchesGroupSize();
+  const validationError = getTaskValidationError();
+  if (validationError) {
+    setCreateFeedback("warning", "还没有可创建的任务", validationError);
+    showToast("warning", "还没有可创建的任务", validationError);
     return;
   }
 
-  await ensureScanMatchesGroupSize();
-  if (!state.scan || !state.scan.groups.length) {
-    return;
-  }
+  const publishType = getPublishType();
+  const sourceItems = getTaskSourceItems();
+  const videoSource = getVideoSource();
 
   state.ui.creatingJobs = true;
   setButtonLoading("createJobsBtn", "正在创建任务...", true);
   setCreateFeedback(
     "info",
-    `正在创建 ${state.scan.groups.length} 组任务`,
-    `当前按 ${state.scan.group_size} 张一组。组数越多，文案生成时间越长。`
+    `正在创建 ${sourceItems.length} 个任务`,
+    publishType === "video"
+      ? (
+        videoSource === "mix_from_images"
+          ? `将把当前图片自动混剪成视频，效果：${$("mixed_video_effect").selectedOptions[0]?.textContent || "轻动效 + 淡入淡出"}。`
+          : "将直接用本地视频创建任务。"
+      )
+      : `当前按 ${getCurrentGroupSize()} 张一组创建图集任务。`
   );
-  log(`开始创建任务：${state.scan.groups.length} 组，按 ${state.scan.group_size} 张一组`);
 
   try {
     const startedAt = Date.now();
+    const payload = {
+      publish_type: publishType,
+      video_source: videoSource,
+      mixed_video_effect: getMixedVideoEffect(),
+      groups: state.scan.image_groups || [],
+      video_items: state.scan.video_items || [],
+      topic: $("topic").value.trim(),
+      style: $("caption_style").value,
+      account_position: $("account_position").value.trim(),
+      keywords: $("keywords").value.trim(),
+      banned_words: $("banned_words").value.trim(),
+      auto_caption: true,
+      replace_existing: true,
+    };
     const data = await api("/api/jobs", {
       method: "POST",
-      body: JSON.stringify({
-        groups: state.scan.groups,
-        topic: $("topic").value.trim(),
-        style: $("caption_style").value,
-        account_position: $("account_position").value.trim(),
-        keywords: $("keywords").value.trim(),
-        banned_words: $("banned_words").value.trim(),
-        auto_caption: true,
-        replace_existing: true,
-      }),
+      body: JSON.stringify(payload),
     });
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-    const replacedCount = Number(data.replaced_count || 0);
+    const replaced = Number(data.replaced_count || 0);
     setCreateFeedback(
       "success",
       `已创建 ${data.jobs.length} 个任务`,
-      `${replacedCount ? `已覆盖 ${replacedCount} 个旧任务，` : ""}耗时 ${seconds} 秒。页面已滚动到任务队列。`
+      `${replaced ? `已覆盖 ${replaced} 个旧任务，` : ""}耗时 ${seconds} 秒。`
     );
-    showToast("success", "任务创建完成", `${data.jobs.length} 个任务${replacedCount ? `，已覆盖 ${replacedCount} 个旧任务` : ""}`);
-    log(`任务创建完成：${data.jobs.length} 个任务，覆盖旧任务 ${replacedCount} 个，耗时 ${seconds} 秒`);
+    showToast("success", "任务创建完成", `${data.jobs.length} 个任务`);
+    log(`任务创建完成：${data.jobs.length} 个任务，类型 ${publishType}`);
     await loadJobs();
-    document.querySelector(".jobs-band")?.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     setCreateFeedback("error", "创建任务失败", error.message || "请查看日志。");
     showToast("error", "创建任务失败", error.message);
@@ -461,7 +585,7 @@ async function testCaption() {
       banned_words: $("banned_words").value.trim(),
       hashtags_count: Math.min(5, Number($("hashtags_count").value || 5)),
       group_index: 1,
-      material_count: getCurrentGroupSize(),
+      material_count: getPublishType() === "video" ? 1 : getCurrentGroupSize(),
     }),
   });
   $("captionPreview").textContent = JSON.stringify(data, null, 2);
@@ -507,10 +631,12 @@ function renderJobs() {
 
   for (const job of state.jobs) {
     const errorSummary = summarizeJobError(job);
+    const kindLabel = materialKindLabel(job);
+    const countLabel = materialCountLabel(job);
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td><strong>${escapeHtml(job.id)}</strong><br><span class="muted">${escapeHtml(job.material_type)}</span></td>
-      <td>${job.material_paths.length} 张</td>
+      <td><strong>${escapeHtml(job.id)}</strong><br><span class="muted">${escapeHtml(kindLabel)}</span></td>
+      <td>${escapeHtml(countLabel)}</td>
       <td>
         <div>${escapeHtml(job.title || "未生成")}</div>
         ${errorSummary ? `<div class="job-detail error-text">${escapeHtml(errorSummary)}</div>` : ""}
@@ -534,7 +660,7 @@ function renderJobs() {
           <div class="inline-editor">
             <div class="inline-editor-head">
               <strong>编辑任务 ${escapeHtml(job.id)}</strong>
-              <span>修改后直接保存，最多 5 个话题</span>
+              <span>最多 5 个话题</span>
             </div>
             <div class="inline-editor-grid">
               <label>标题
@@ -568,21 +694,18 @@ function renderJobs() {
     button.addEventListener("click", () => saveInlineJob(button.dataset.saveInline));
   });
   tbody.querySelectorAll("[data-cancel-inline]").forEach((button) => {
-    button.addEventListener("click", clearEditor);
+    button.addEventListener("click", clearInlineEditor);
   });
 }
 
 function editJob(id) {
-  const job = state.jobs.find((item) => item.id === id);
-  if (!job) return;
-  state.editingJobId = state.editingJobId === job.id ? "" : job.id;
+  state.editingJobId = state.editingJobId === id ? "" : id;
   renderJobs();
-  const inlineTitle = $("inlineEditTitle");
-  if (inlineTitle) {
-    inlineTitle.focus();
+  const input = $("inlineEditTitle");
+  if (input) {
+    input.focus();
   }
-  log(`正在编辑任务 ${job.id}`);
-  showToast("info", "已打开任务编辑", job.id);
+  log(`正在编辑任务 ${id}`);
 }
 
 async function saveInlineJob(id) {
@@ -619,7 +742,7 @@ async function publishJob(id) {
   });
 }
 
-function clearEditor() {
+function clearInlineEditor() {
   state.editingJobId = "";
   renderJobs();
 }
@@ -665,6 +788,9 @@ function bindEvents() {
       setCreateFeedback("info", "分组数已修改", `当前改为 ${getCurrentGroupSize()} 张一组，创建任务前会自动重新分组。`);
     }
   });
+  $("publish_type").addEventListener("change", updatePublishTypeUi);
+  $("video_source").addEventListener("change", updatePublishTypeUi);
+  $("mixed_video_effect").addEventListener("change", updatePublishTypeUi);
 
   $("pickFolderBtn").addEventListener("click", () => $("folderPicker").click());
   $("pickFilesBtn").addEventListener("click", () => $("filePicker").click());
@@ -697,6 +823,7 @@ async function boot() {
   await loadJobs();
   restoreSelectionUiHint();
   renderSelectionSummary();
+  renderScan();
   log("工作台已就绪");
   showToast("info", "工作台已就绪", "可以开始选择素材或恢复上次选择");
 }

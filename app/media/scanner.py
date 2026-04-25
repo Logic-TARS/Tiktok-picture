@@ -44,7 +44,7 @@ def scan_paths(raw_paths: list[str], group_size: int = 4) -> dict[str, Any]:
         key=lambda value: value.lower(),
     )
 
-    groups = [
+    image_groups = [
         {
             "material_type": "image_gallery",
             "paths": images[index : index + group_size],
@@ -52,13 +52,22 @@ def scan_paths(raw_paths: list[str], group_size: int = 4) -> dict[str, Any]:
         }
         for index in range(0, len(images), group_size)
     ]
+    video_items = [
+        {
+            "material_type": "video",
+            "paths": [path],
+            "is_full_group": True,
+        }
+        for path in videos
+    ]
 
     return {
         "images": images,
         "videos": videos,
         "unsupported": unsupported,
-        "groups": groups,
+        "groups": image_groups,
+        "image_groups": image_groups,
+        "video_items": video_items,
         "skipped": skipped,
         "group_size": group_size,
     }
-

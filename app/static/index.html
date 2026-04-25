@@ -30,12 +30,11 @@
               <ol class="guide-steps">
                 <li>确认你已经登录抖音创作者中心。</li>
                 <li>在“配置”里填 DeepSeek Key，模型默认可先用 <code>deepseek-v4-flash</code>。</li>
-                <li>在“素材”里选择文件夹或图片，系统会复制到本地工作目录。</li>
-                <li>确认“每组图片数”，需要改成 3 张或其他数量时，系统会自动按新规则重分组。</li>
-                <li>点击“创建任务”，系统会为每组图片生成标题、正文和话题。</li>
-                <li>点击任务里的“编辑”可以修改文案，页面会自动滚动到编辑区。</li>
-                <li>点击“半自动发布”后，系统会打开抖音创作者中心并尝试上传和填文案。</li>
-                <li>如果页面结构变化，先看下方运行日志和错误提示。</li>
+                <li>在“素材”里选择文件夹或图片 / 视频，系统会复制到本地工作目录。</li>
+                <li>在“发布类型”里选择图集或视频；视频支持直接发本地视频，也支持用当前图片自动混剪。</li>
+                <li>点击“创建任务”，系统会覆盖旧草稿任务并生成新的标题、正文和话题。</li>
+                <li>点击任务里的“编辑”可以直接在该任务下方修改文案。</li>
+                <li>点击“半自动发布”后，系统会按任务类型切到“发布图文”或“发布视频”。</li>
               </ol>
             </div>
             <div class="guide-side">
@@ -43,17 +42,16 @@
                 <strong>首次必看</strong>
                 <ul>
                   <li>DeepSeek Key 可以放在页面配置里，也可以放在项目根目录的 <code>env.txt</code>。</li>
-                  <li>如果页面提示 Playwright 或 FFmpeg 不可用，先用启动脚本重新启动。</li>
-                  <li>创建任务时，如果组数较多，文案生成会比 4 张一组更慢，这是正常的。</li>
+                  <li>图片混剪视频依赖 FFmpeg，没有安装时无法创建混剪视频任务。</li>
+                  <li>再次点击“创建任务”会覆盖旧草稿任务，不会无限追加。</li>
                 </ul>
               </div>
               <div class="guide-note danger-note">
                 <strong>报错时怎么办</strong>
                 <ul>
                   <li>DeepSeek 未配置：检查页面中的 API Key 或 <code>env.txt</code>。</li>
-                  <li>创建任务很慢：通常是组数变多后在逐组生成文案，先看任务创建反馈卡片。</li>
-                  <li>编辑按钮没反应：现在会自动滚动到编辑区并高亮，如果没有跳转，刷新页面后重试。</li>
-                  <li>发布失败：看任务卡片中的原因说明和右侧运行日志。</li>
+                  <li>混剪视频失败：通常是 FFmpeg 未安装或图片文件异常。</li>
+                  <li>视频发布失败：看任务卡片中的原因说明和右侧运行日志。</li>
                 </ul>
               </div>
             </div>
@@ -101,7 +99,7 @@
           </div>
           <label class="checkbox-row">
             <input id="force_9x16_upload" type="checkbox">
-            <span>发布前自动转成 9:16，上传后立即删除临时处理文件</span>
+            <span>图集发布前自动转成 9:16，上传后立即删除临时处理文件</span>
           </label>
           <label>9:16 处理模式
             <select id="force_9x16_mode">
@@ -127,15 +125,39 @@
           <h2>素材</h2>
           <input id="folderPicker" class="hidden" type="file" webkitdirectory multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v">
           <input id="filePicker" class="hidden" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v">
+
+          <div class="mode-grid">
+            <label>发布类型
+              <select id="publish_type">
+                <option value="image_gallery">图集</option>
+                <option value="video">视频</option>
+              </select>
+            </label>
+            <label id="video_source_wrap" class="hidden">视频来源
+              <select id="video_source">
+                <option value="direct_video">直接发布本地视频</option>
+                <option value="mix_from_images">用当前图片自动混剪成视频</option>
+              </select>
+            </label>
+          </div>
+          <label id="mixed_video_effect_wrap" class="hidden">视频效果
+            <select id="mixed_video_effect">
+              <option value="none">无效果</option>
+              <option value="fade">淡入淡出</option>
+              <option value="motion">轻动效</option>
+              <option value="motion_fade">轻动效 + 淡入淡出</option>
+            </select>
+          </label>
+
           <div class="picker-actions">
             <button id="pickFolderBtn" type="button">选择文件夹</button>
-            <button id="pickFilesBtn" class="ghost" type="button">选择图片</button>
+            <button id="pickFilesBtn" class="ghost" type="button">选择文件</button>
             <button id="restoreSelectionBtn" class="ghost hidden" type="button">恢复上次选择</button>
           </div>
           <div id="selectionSummary" class="selection-summary empty">还没有选择素材</div>
           <div class="actions button-row">
             <button id="scanBtn" type="button">重新扫描</button>
-            <button id="createJobsBtn" class="secondary" type="button">创建 4 图任务</button>
+            <button id="createJobsBtn" class="secondary" type="button">创建图集任务</button>
           </div>
           <div id="createJobsFeedback" class="feedback-card hidden" aria-live="polite"></div>
           <div id="scanSummary" class="scan-summary"></div>
@@ -174,14 +196,14 @@
       <section class="band jobs-band">
         <div class="section-heading">
           <h2>任务队列</h2>
-          <span>上传、填文案、选音乐后自动点击发布</span>
+          <span>图集会切到“发布图文”，视频会切到“发布视频”</span>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>任务</th>
-                <th>图片</th>
+                <th>素材</th>
                 <th>标题</th>
                 <th>状态</th>
                 <th>更新时间</th>
