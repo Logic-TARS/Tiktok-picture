@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>抖音二次元图集发布工具</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+    <header class="topbar">
+      <div>
+        <h1>抖音二次元图集发布工具</h1>
+        <p id="healthText">正在检查运行状态...</p>
+      </div>
+      <div class="top-actions">
+        <button id="refreshJobsBtn" class="ghost" type="button">刷新任务</button>
+        <button id="saveConfigBtn" type="button">保存配置</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="band">
+        <details class="guide-details">
+          <summary>新手说明</summary>
+          <div class="guide-shell">
+            <div class="guide-copy">
+              <h2>第一次使用按这个顺序走</h2>
+              <ol class="guide-steps">
+                <li>确认你已经登录抖音创作者中心。</li>
+                <li>在“配置”里填 DeepSeek Key，模型默认可先用 <code>deepseek-v4-flash</code>。</li>
+                <li>在“素材”里选择文件夹或图片，系统会复制到本地工作目录。</li>
+                <li>确认“每组图片数”，需要改成 3 张或其他数量时，系统会自动按新规则重分组。</li>
+                <li>点击“创建任务”，系统会为每组图片生成标题、正文和话题。</li>
+                <li>点击任务里的“编辑”可以修改文案，页面会自动滚动到编辑区。</li>
+                <li>点击“半自动发布”后，系统会打开抖音创作者中心并尝试上传和填文案。</li>
+                <li>如果页面结构变化，先看下方运行日志和错误提示。</li>
+              </ol>
+            </div>
+            <div class="guide-side">
+              <div class="guide-note">
+                <strong>首次必看</strong>
+                <ul>
+                  <li>DeepSeek Key 可以放在页面配置里，也可以放在项目根目录的 <code>env.txt</code>。</li>
+                  <li>如果页面提示 Playwright 或 FFmpeg 不可用，先用启动脚本重新启动。</li>
+                  <li>创建任务时，如果组数较多，文案生成会比 4 张一组更慢，这是正常的。</li>
+                </ul>
+              </div>
+              <div class="guide-note danger-note">
+                <strong>报错时怎么办</strong>
+                <ul>
+                  <li>DeepSeek 未配置：检查页面中的 API Key 或 <code>env.txt</code>。</li>
+                  <li>创建任务很慢：通常是组数变多后在逐组生成文案，先看任务创建反馈卡片。</li>
+                  <li>编辑按钮没反应：现在会自动滚动到编辑区并高亮，如果没有跳转，刷新页面后重试。</li>
+                  <li>发布失败：看任务卡片中的原因说明和右侧运行日志。</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section class="band controls-grid">
+        <form id="configForm" class="panel">
+          <h2>配置</h2>
+          <label>DeepSeek API Key
+            <input id="deepseek_api_key" type="password" autocomplete="off" placeholder="留空则使用本地模板">
+          </label>
+          <label>DeepSeek Base URL
+            <input id="deepseek_base_url" type="text">
+          </label>
+          <label>模型
+            <select id="deepseek_model_select">
+              <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+              <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+              <option value="deepseek-chat">deepseek-chat</option>
+              <option value="deepseek-reasoner">deepseek-reasoner</option>
+              <option value="__custom__">自定义</option>
+            </select>
+          </label>
+          <label id="deepseek_model_custom_wrap" class="hidden">自定义模型
+            <input id="deepseek_model" type="text" placeholder="输入自定义 DeepSeek 模型名">
+          </label>
+          <label>创作者中心发布页
+            <input id="creator_upload_url" type="text">
+          </label>
+          <label>浏览器用户数据目录
+            <input id="browser_profile_dir" type="text">
+          </label>
+          <label>浏览器路径
+            <input id="browser_path" type="text" placeholder="可选">
+          </label>
+          <div class="split">
+            <label>每组图片数
+              <input id="group_size" type="number" min="1" max="12" value="4">
+            </label>
+            <label>话题数量
+              <input id="hashtags_count" type="number" min="1" max="5" value="5">
+            </label>
+          </div>
+          <label class="checkbox-row">
+            <input id="force_9x16_upload" type="checkbox">
+            <span>发布前自动转成 9:16，上传后立即删除临时处理文件</span>
+          </label>
+          <label>9:16 处理模式
+            <select id="force_9x16_mode">
+              <option value="blur_background">模糊背景适配</option>
+              <option value="crop_center">直接裁剪成 9:16</option>
+            </select>
+          </label>
+          <details class="selector-details">
+            <summary>页面选择器</summary>
+            <label>上传控件选择器
+              <input id="upload_selector" type="text">
+            </label>
+            <label>标题选择器
+              <input id="title_selector" type="text">
+            </label>
+            <label>正文选择器
+              <input id="caption_selector" type="text">
+            </label>
+          </details>
+        </form>
+
+        <section class="panel">
+          <h2>素材</h2>
+          <input id="folderPicker" class="hidden" type="file" webkitdirectory multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v">
+          <input id="filePicker" class="hidden" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v">
+          <div class="picker-actions">
+            <button id="pickFolderBtn" type="button">选择文件夹</button>
+            <button id="pickFilesBtn" class="ghost" type="button">选择图片</button>
+            <button id="restoreSelectionBtn" class="ghost hidden" type="button">恢复上次选择</button>
+          </div>
+          <div id="selectionSummary" class="selection-summary empty">还没有选择素材</div>
+          <div class="actions button-row">
+            <button id="scanBtn" type="button">重新扫描</button>
+            <button id="createJobsBtn" class="secondary" type="button">创建 4 图任务</button>
+          </div>
+          <div id="createJobsFeedback" class="feedback-card hidden" aria-live="polite"></div>
+          <div id="scanSummary" class="scan-summary"></div>
+          <div id="groupsList" class="groups-list"></div>
+        </section>
+
+        <section class="panel">
+          <h2>文案</h2>
+          <label>内容主题
+            <input id="topic" type="text">
+          </label>
+          <label>账号定位
+            <input id="account_position" type="text">
+          </label>
+          <label>文案风格
+            <select id="caption_style">
+              <option>治愈收藏向</option>
+              <option>情绪共鸣向</option>
+              <option>头像壁纸向</option>
+              <option>反差钩子向</option>
+              <option>人设故事向</option>
+              <option>评论互动向</option>
+            </select>
+          </label>
+          <label>关键词
+            <input id="keywords" type="text" placeholder="银发, 雨夜, 氛围感">
+          </label>
+          <label>禁用词
+            <input id="banned_words" type="text" placeholder="可选">
+          </label>
+          <button id="testCaptionBtn" class="ghost wide" type="button">生成测试文案</button>
+          <pre id="captionPreview" class="preview"></pre>
+        </section>
+      </section>
+
+      <section class="band jobs-band">
+        <div class="section-heading">
+          <h2>任务队列</h2>
+          <span>上传、填文案、选音乐后自动点击发布</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>任务</th>
+                <th>图片</th>
+                <th>标题</th>
+                <th>状态</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="jobsTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="band editor-band">
+        <div class="panel log-panel">
+          <h2>运行日志</h2>
+          <div id="logBox" class="log-box"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

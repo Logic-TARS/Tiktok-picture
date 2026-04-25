@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+env.txt
+data/*.db
+data/config.json
+data/uploads/
+data/logs/
+data/browser-profile/
+data/outputs/
+tmp_*

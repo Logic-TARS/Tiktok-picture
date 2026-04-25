@@ -1,0 +1,2 @@
+"""Local Douyin publishing assistant."""
+

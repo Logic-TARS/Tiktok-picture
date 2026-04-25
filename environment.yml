@@ -1,0 +1,10 @@
+name: douyin-publisher
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - ffmpeg
+  - pip:
+      - playwright>=1.44.0
+
