@@ -9,10 +9,17 @@ from app import database
 from app.config import DATA_DIR, load_config
 from app.deepseek_client import generate_caption
 from app.logger import get_logger
-from app.media.video_mixer import mix_images_to_video, normalize_effect_mode
+from app.media.image_9x16 import BLUR_BACKGROUND
+from app.media.video_mixer import (
+    mix_images_to_video,
+    normalize_audio_clip_duration,
+    normalize_audio_start_seconds,
+    normalize_effect_mode,
+)
 from app.publisher.douyin import publish_to_creator
 
 LOGGER = get_logger("app.services.jobs")
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
 
 def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
@@ -28,6 +35,7 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
     publish_type = str(payload.get("publish_type") or "image_gallery").strip() or "image_gallery"
     video_source = str(payload.get("video_source") or "direct_video").strip() or "direct_video"
     mixed_video_effect = normalize_effect_mode(payload.get("mixed_video_effect") or config.get("mixed_video_effect"))
+    mixed_video_frame_mode = str(config.get("force_9x16_mode") or BLUR_BACKGROUND).strip() or BLUR_BACKGROUND
 
     created: list[dict[str, Any]] = []
     replaced_count = 0
@@ -40,9 +48,15 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
     if publish_type == "video":
         video_items = payload.get("video_items") or []
         groups = payload.get("groups") or []
+        selected_audio_path = str(payload.get("selected_audio_path") or "").strip()
+        selected_audio_start = normalize_audio_start_seconds(payload.get("selected_audio_start"))
+        selected_audio_duration = normalize_audio_clip_duration(payload.get("selected_audio_duration"))
         if video_source == "mix_from_images":
             created = _create_mixed_video_jobs(
                 groups=groups,
+                selected_audio_path=selected_audio_path,
+                selected_audio_start=selected_audio_start,
+                selected_audio_duration=selected_audio_duration,
                 config=config,
                 topic=topic,
                 style=style,
@@ -52,6 +66,7 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
                 hashtags_count=hashtags_count,
                 auto_caption=auto_caption,
                 effect_mode=mixed_video_effect,
+                frame_mode=mixed_video_frame_mode,
             )
         else:
             created = _create_direct_video_jobs(
@@ -109,7 +124,6 @@ def _create_direct_video_jobs(
     banned_words: str,
     hashtags_count: int,
     auto_caption: bool,
-    effect_mode: str,
 ) -> list[dict[str, Any]]:
     created: list[dict[str, Any]] = []
     for index, item in enumerate(video_items, start=1):
@@ -145,6 +159,9 @@ def _create_direct_video_jobs(
 def _create_mixed_video_jobs(
     *,
     groups: list[dict[str, Any]],
+    selected_audio_path: str,
+    selected_audio_start: float,
+    selected_audio_duration: float,
     config: dict[str, Any],
     topic: str,
     style: str,
@@ -153,10 +170,13 @@ def _create_mixed_video_jobs(
     banned_words: str,
     hashtags_count: int,
     auto_caption: bool,
+    effect_mode: str,
+    frame_mode: str,
 ) -> list[dict[str, Any]]:
     created: list[dict[str, Any]] = []
     outputs_dir = DATA_DIR / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
+    bgm_path = _resolve_selected_bgm(selected_audio_path) or _find_bgm_for_groups(groups)
 
     for index, group in enumerate(groups, start=1):
         paths = group.get("paths") if isinstance(group, dict) else group
@@ -167,6 +187,10 @@ def _create_mixed_video_jobs(
             paths,
             output_name=output_name,
             effect_mode=effect_mode,
+            frame_mode=frame_mode,
+            bgm_path=bgm_path or None,
+            bgm_start_seconds=selected_audio_start,
+            bgm_clip_duration=selected_audio_duration,
         )
         caption = _build_caption(
             config=config,
@@ -192,12 +216,49 @@ def _create_mixed_video_jobs(
         )
         created.append(job)
         LOGGER.info(
-            "Created mixed video job %s from %s images with effect %s",
+            "Created mixed video job %s from %s images with effect %s frame_mode %s and bgm %s (start=%s duration=%s)",
             job["id"],
             len(paths),
             effect_mode,
+            frame_mode,
+            bool(bgm_path),
+            selected_audio_start,
+            selected_audio_duration,
         )
     return created
+
+
+def _resolve_selected_bgm(selected_audio_path: str) -> str:
+    if not selected_audio_path:
+        return ""
+    path = Path(selected_audio_path).resolve()
+    if path.exists() and path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
+        return str(path)
+    return ""
+
+
+def _find_bgm_for_groups(groups: list[dict[str, Any]]) -> str:
+    search_roots: list[Path] = []
+    for group in groups:
+        paths = group.get("paths") if isinstance(group, dict) else group
+        if not paths:
+            continue
+        first_path = Path(str(paths[0])).resolve()
+        search_roots.extend([first_path.parent, first_path.parent.parent])
+
+    seen: set[str] = set()
+    for root in search_roots:
+        root_key = str(root)
+        if root_key in seen or not root.exists():
+            continue
+        seen.add(root_key)
+        audio_files = sorted(
+            [path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS],
+            key=lambda item: str(item).lower(),
+        )
+        if audio_files:
+            return str(audio_files[0])
+    return ""
 
 
 def _build_caption(

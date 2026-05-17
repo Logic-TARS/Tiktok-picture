@@ -16,7 +16,7 @@ from app.config import ROOT_DIR, load_config, public_config, save_config
 from app.deepseek_client import generate_caption
 from app.logger import get_logger, setup_logging
 from app.media.scanner import scan_paths
-from app.media.uploads import save_uploaded_files
+from app.media.uploads import UPLOADS_DIR, save_uploaded_files, save_uploaded_files_to_dir
 from app.media.video_mixer import ffmpeg_available
 from app.services.jobs import create_gallery_jobs, publish_job_async
 
@@ -84,6 +84,27 @@ class AppHandler(BaseHTTPRequestHandler):
                 scan_result.update(upload_result)
                 scan_result["source_label"] = source_label
                 self.send_json(scan_result, status=HTTPStatus.CREATED)
+            elif path == "/api/materials/audio":
+                form = self.read_multipart()
+                upload_dir = (form.getfirst("upload_dir", "") or "").strip()
+                if not upload_dir:
+                    raise RuntimeError("Please import image or video materials first.")
+
+                target_dir = resolve_upload_dir(upload_dir)
+                uploaded_files: list[tuple[str, bytes]] = []
+                field_items = form["files"] if "files" in form else []
+                if not isinstance(field_items, list):
+                    field_items = [field_items]
+                for item in field_items:
+                    if getattr(item, "filename", None):
+                        uploaded_files.append((f"_audio/{item.filename}", item.file.read()))
+                if not uploaded_files:
+                    raise RuntimeError("No audio files were selected.")
+
+                upload_result = save_uploaded_files_to_dir(uploaded_files, target_dir)
+                scan_result = scan_paths([str(target_dir)], group_size=int(load_config().get("group_size") or 4))
+                scan_result.update(upload_result)
+                self.send_json(scan_result, status=HTTPStatus.CREATED)
             elif path == "/api/materials/scan":
                 payload = self.read_json()
                 config = load_config()
@@ -102,6 +123,16 @@ class AppHandler(BaseHTTPRequestHandler):
                 job_id = path.split("/")[3]
                 job = publish_job_async(job_id)
                 self.send_json({"job": job, "message": "publish_started"})
+            elif path.startswith("/api/jobs/") and path.endswith("/confirm"):
+                job_id = path.split("/")[3]
+                job = database.update_job(job_id, status="published", error_message="")
+                database.add_publish_record(job, "published", "")
+                self.send_json({"job": job, "message": "confirmed"})
+            elif path.startswith("/api/jobs/") and path.endswith("/delete"):
+                job_id = path.split("/")[3]
+                job = database.delete_job(job_id)
+                cleanup_job_files(job)
+                self.send_json({"job": job, "message": "deleted"})
             elif path.startswith("/api/jobs/"):
                 payload = self.read_json()
                 job_id = path.split("/")[3]
@@ -168,6 +199,30 @@ class AppHandler(BaseHTTPRequestHandler):
 
 def module_available(name: str) -> bool:
     return shutil.which("python") is not None and importlib.util.find_spec(name) is not None
+
+
+def resolve_upload_dir(raw_path: str) -> Path:
+    target = Path(raw_path).resolve()
+    uploads_root = UPLOADS_DIR.resolve()
+    if not str(target).startswith(str(uploads_root)) or not target.exists() or not target.is_dir():
+        raise RuntimeError("Upload directory is invalid.")
+    return target
+
+
+def cleanup_job_files(job: dict) -> None:
+    for raw_path in job.get("material_paths", []):
+        path = Path(str(raw_path))
+        if not path.exists():
+            continue
+        normalized = str(path.resolve()).replace("\\", "/").lower()
+        if "/data/outputs/mixed_" not in normalized:
+            continue
+        if str(path) in database.used_material_paths():
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            LOGGER.warning("Failed to remove generated file for job %s: %s", job.get("id"), path)
 
 
 def run(host: str = "127.0.0.1", port: int = 8765) -> None:

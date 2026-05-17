@@ -300,6 +300,13 @@ select:focus {
   gap: 12px;
 }
 
+.helper-text {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .selector-details {
   border-top: 1px solid var(--line);
   padding-top: 12px;
@@ -332,6 +339,11 @@ button.ghost {
   background: transparent;
   border: 1px solid var(--line);
   color: inherit;
+}
+
+button.ghost.danger {
+  border-color: #efc2c8;
+  color: var(--danger);
 }
 
 .topbar button.ghost {

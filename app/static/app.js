@@ -1,4 +1,6 @@
 const STORAGE_KEY = "tiktok-picture:last-material-selection";
+const MIX_SEGMENT_DURATION = 2.8;
+const MIX_TRANSITION_DURATION = 0.45;
 
 const presetModels = [
   "deepseek-v4-flash",
@@ -47,7 +49,7 @@ function escapeHtml(value) {
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
-    "\"": "&quot;",
+    '"': "&quot;",
     "'": "&#039;",
   })[char]);
 }
@@ -69,7 +71,7 @@ function showToast(kind, title, detail = "") {
   window.setTimeout(() => {
     toast.classList.add("closing");
     window.setTimeout(() => toast.remove(), 220);
-  }, 4200);
+  }, 3600);
 }
 
 async function api(path, options = {}) {
@@ -89,6 +91,7 @@ async function api(path, options = {}) {
 
 function setButtonLoading(buttonId, loadingText, isLoading) {
   const button = $(buttonId);
+  if (!button) return;
   if (!button.dataset.defaultText) {
     button.dataset.defaultText = button.textContent;
   }
@@ -98,6 +101,7 @@ function setButtonLoading(buttonId, loadingText, isLoading) {
 
 function setCreateFeedback(kind, message, detail = "") {
   const node = $("createJobsFeedback");
+  if (!node) return;
   if (!message) {
     node.className = "feedback-card hidden";
     node.innerHTML = "";
@@ -138,26 +142,20 @@ function statusClassName(status) {
 function summarizeJobError(job) {
   const raw = (job.error_message || "").trim();
   if (!raw) return "";
-  if (raw.includes("图集上传入口")) return raw;
-  if (raw.includes("视频上传控件")) return raw;
   if (raw.toLowerCase().includes("timeout")) {
-    return "等待抖音创作者中心页面超时，请确认当前账号仍处于登录状态。";
+    return "等待创作者中心页面超时，请确认当前账号仍处于登录状态。";
   }
   return raw;
 }
 
 function isMixedVideoJob(job) {
-  if ((job.material_type || "") !== "video") {
-    return false;
-  }
+  if ((job.material_type || "") !== "video") return false;
   const firstPath = String((job.material_paths || [])[0] || "").replaceAll("/", "\\").toLowerCase();
-  return firstPath.includes("\\data\\outputs\\mixed_") || firstPath.endsWith(".mp4") && firstPath.includes("\\data\\outputs\\");
+  return firstPath.includes("\\data\\outputs\\mixed_");
 }
 
 function materialKindLabel(job) {
-  if ((job.material_type || "") === "image_gallery") {
-    return "图集";
-  }
+  if ((job.material_type || "") === "image_gallery") return "图集";
   if ((job.material_type || "") === "video") {
     return isMixedVideoJob(job) ? "混剪视频" : "本地视频";
   }
@@ -171,7 +169,7 @@ function materialCountLabel(job) {
   if ((job.material_type || "") === "video") {
     return isMixedVideoJob(job) ? "1 个混剪视频" : "1 个本地视频";
   }
-  return `${(job.material_paths || []).length} 个`;
+  return `${(job.material_paths || []).length} 个素材`;
 }
 
 function applyModelValue(value) {
@@ -210,28 +208,103 @@ function getMixedVideoEffect() {
   return $("mixed_video_effect").value;
 }
 
-function updateMixedVideoEffectUi() {
-  const showEffect = getPublishType() === "video" && getVideoSource() === "mix_from_images";
-  $("mixed_video_effect_wrap").classList.toggle("hidden", !showEffect);
+function getSelectedAudioPath() {
+  return $("mixed_video_audio")?.value || "";
 }
 
-function updatePublishTypeUi() {
-  const publishType = getPublishType();
-  const videoMode = publishType === "video";
-  $("video_source_wrap").classList.toggle("hidden", !videoMode);
-  updateMixedVideoEffectUi();
-  updateCreateButtonLabel();
-  renderScan();
+function getSelectedAudioStart() {
+  return $("mixed_video_audio_start")?.value || "";
+}
+
+function getSelectedAudioDuration() {
+  return $("mixed_video_audio_duration")?.value || "";
+}
+
+function estimateMixedVideoDuration(imageCount, effectMode) {
+  const count = Math.max(0, Number(imageCount || 0));
+  if (!count) return 0;
+  if (count === 1) return MIX_SEGMENT_DURATION;
+  if (effectMode === "fade" || effectMode === "motion_fade") {
+    return (count * MIX_SEGMENT_DURATION) - ((count - 1) * MIX_TRANSITION_DURATION);
+  }
+  return count * MIX_SEGMENT_DURATION;
+}
+
+function formatSeconds(value) {
+  return `${Number(value || 0).toFixed(1)} 秒`;
+}
+
+function renderMixedVideoAudioOptions() {
+  const select = $("mixed_video_audio");
+  if (!select) return;
+  const currentValue = select.value;
+  const audios = state.scan?.audios || [];
+  if (!audios.length) {
+    select.disabled = true;
+    select.innerHTML = '<option value="">当前素材里没有音频文件</option>';
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = '<option value="">自动选择第一首音频</option>';
+  for (const [index, path] of audios.entries()) {
+    const option = document.createElement("option");
+    option.value = path;
+    option.textContent = `${index + 1}. ${path.split(/[\\/]/).pop() || path}`;
+    select.appendChild(option);
+  }
+  if (currentValue && audios.includes(currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+function updateMixedVideoDurationHint() {
+  const node = $("mixedVideoDurationHint");
+  if (!node) return;
+  const showHint = getPublishType() === "video" && getVideoSource() === "mix_from_images";
+  node.classList.toggle("hidden", !showHint);
+  if (!showHint) {
+    node.textContent = "";
+    return;
+  }
+  const groups = state.scan?.image_groups || [];
+  if (!groups.length) {
+    node.textContent = "导入图片后会显示每条混剪视频的预计时长。";
+    return;
+  }
+  const durations = groups.map((group) => estimateMixedVideoDuration((group.paths || []).length, getMixedVideoEffect()));
+  const minDuration = Math.min(...durations);
+  const maxDuration = Math.max(...durations);
+  if (minDuration === maxDuration) {
+    node.textContent = `预计每条混剪视频时长：${formatSeconds(maxDuration)}。`;
+    return;
+  }
+  node.textContent = `预计混剪视频时长：满组约 ${formatSeconds(maxDuration)}，最短一组约 ${formatSeconds(minDuration)}。`;
+}
+
+function updateMixedVideoUi() {
+  const show = getPublishType() === "video" && getVideoSource() === "mix_from_images";
+  $("mixed_video_effect_wrap").classList.toggle("hidden", !show);
+  $("mixed_video_audio_wrap").classList.toggle("hidden", !show);
+  $("mixed_video_audio_clip_wrap").classList.toggle("hidden", !show);
+  updateMixedVideoDurationHint();
 }
 
 function updateCreateButtonLabel() {
   const button = $("createJobsBtn");
-  const publishType = getPublishType();
-  if (publishType === "video") {
+  if (getPublishType() === "video") {
     button.textContent = getVideoSource() === "mix_from_images" ? "创建混剪视频任务" : "创建视频任务";
     return;
   }
   button.textContent = `创建 ${getCurrentGroupSize()} 图任务`;
+}
+
+function updatePublishTypeUi() {
+  const videoMode = getPublishType() === "video";
+  $("video_source_wrap").classList.toggle("hidden", !videoMode);
+  updateMixedVideoUi();
+  renderMixedVideoAudioOptions();
+  updateCreateButtonLabel();
+  renderScan();
 }
 
 function saveSelectionMemory(selection) {
@@ -260,6 +333,7 @@ function renderSelectionSummary() {
     <div class="selection-meta">
       <span>${state.selection.images_count || 0} 张图片</span>
       <span>${state.selection.videos_count || 0} 个视频</span>
+      <span>${state.selection.audios_count || 0} 个音频</span>
       <span>${state.selection.groups_count || 0} 组图片</span>
     </div>
   `;
@@ -270,6 +344,7 @@ function renderScan() {
   if (!scan) {
     $("scanSummary").textContent = "";
     $("groupsList").innerHTML = "";
+    updateMixedVideoDurationHint();
     return;
   }
 
@@ -277,8 +352,8 @@ function renderScan() {
   const videoSource = getVideoSource();
   const groupsList = $("groupsList");
   groupsList.innerHTML = "";
-
-  $("scanSummary").textContent = `${scan.images.length} 张图片，${scan.videos.length} 个视频，${scan.image_groups.length} 组图片`;
+  $("scanSummary").textContent = `${scan.images.length} 张图片，${scan.videos.length} 个视频，${(scan.audios || []).length} 个音频，${scan.image_groups.length} 组图片`;
+  updateMixedVideoDurationHint();
 
   if (publishType === "video" && videoSource === "direct_video") {
     for (const [index, item] of (scan.video_items || []).entries()) {
@@ -298,7 +373,7 @@ function renderScan() {
   for (const [index, group] of (scan.image_groups || []).entries()) {
     const row = document.createElement("div");
     row.className = "group-item";
-    row.innerHTML = `<strong>第 ${index + 1} 组 · ${group.paths.length} 张${group.is_full_group ? "" : " · 不足一组"}</strong>`;
+    row.innerHTML = `<strong>第 ${index + 1} 组 · ${group.paths.length} 张${group.is_full_group ? "" : " · 不足满组"}</strong>`;
     group.paths.forEach((path) => {
       const line = document.createElement("span");
       line.textContent = path.split(/[\\/]/).slice(-2).join(" / ");
@@ -315,11 +390,13 @@ function setSelectionFromScan(scanResult, meta = {}) {
     source_label: meta.source_label || scanResult.source_label || "已选择素材",
     images_count: scanResult.images.length,
     videos_count: scanResult.videos.length,
+    audios_count: (scanResult.audios || []).length,
     groups_count: scanResult.image_groups.length,
     group_size: scanResult.group_size,
   };
   saveSelectionMemory(state.selection);
   $("restoreSelectionBtn").classList.remove("hidden");
+  renderMixedVideoAudioOptions();
   renderSelectionSummary();
   renderScan();
 }
@@ -371,6 +448,16 @@ async function saveConfig() {
   await loadHealth();
 }
 
+async function saveConfigQuietly() {
+  try {
+    await saveConfig();
+    showToast("success", "9:16 配置已生效");
+  } catch (error) {
+    showToast("error", "保存 9:16 配置失败", error.message);
+    log(`保存 9:16 配置失败：${error.message}`);
+  }
+}
+
 async function uploadMaterials(files, label) {
   if (!files.length) {
     setCreateFeedback("warning", "还没有选中素材", "请先选择文件夹或文件。");
@@ -387,7 +474,7 @@ async function uploadMaterials(files, label) {
   state.ui.uploadingMaterials = true;
   setButtonLoading("pickFolderBtn", "正在导入文件夹...", true);
   setButtonLoading("pickFilesBtn", "正在导入文件...", true);
-  setCreateFeedback("info", "正在导入素材", `已选 ${files.length} 个文件，正在复制到本地工作目录。`);
+  setCreateFeedback("info", "正在导入素材", `已选择 ${files.length} 个文件。`);
 
   try {
     const response = await fetch("/api/materials/upload", { method: "POST", body: formData });
@@ -397,13 +484,9 @@ async function uploadMaterials(files, label) {
       upload_dir: data.upload_dir,
       source_label: label,
     });
-    setCreateFeedback(
-      "success",
-      "素材已导入",
-      `${data.images.length} 张图片，${data.videos.length} 个视频，${data.image_groups.length} 组图片。`
-    );
+    setCreateFeedback("success", "素材已导入", `${data.images.length} 张图片，${data.videos.length} 个视频，${(data.audios || []).length} 个音频。`);
     showToast("success", "素材已导入", `${data.images.length} 张图片，${data.videos.length} 个视频`);
-    log(`素材导入完成：${data.images.length} 张图片，${data.videos.length} 个视频`);
+    log(`素材导入完成：${data.images.length} 张图片，${data.videos.length} 个视频，${(data.audios || []).length} 个音频`);
   } catch (error) {
     setCreateFeedback("error", "导入素材失败", error.message || "请重试。");
     showToast("error", "导入素材失败", error.message);
@@ -412,6 +495,45 @@ async function uploadMaterials(files, label) {
     state.ui.uploadingMaterials = false;
     setButtonLoading("pickFolderBtn", "正在导入文件夹...", false);
     setButtonLoading("pickFilesBtn", "正在导入文件...", false);
+  }
+}
+
+async function uploadAudioFiles(files) {
+  if (!files.length) {
+    setCreateFeedback("warning", "还没有选中音频文件", "请先选择背景音乐文件。");
+    return;
+  }
+  if (!state.selection?.upload_dir) {
+    setCreateFeedback("warning", "请先导入素材", "先导入图片或视频，再单独追加背景音乐。");
+    showToast("warning", "请先导入素材");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("upload_dir", state.selection.upload_dir);
+  files.forEach((file) => {
+    formData.append("files", file, file.name);
+  });
+
+  state.ui.uploadingMaterials = true;
+  setButtonLoading("pickAudioBtn", "正在追加音频...", true);
+  setCreateFeedback("info", "正在追加背景音乐", `已选择 ${files.length} 个音频文件。`);
+
+  try {
+    const response = await fetch("/api/materials/audio", { method: "POST", body: formData });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || response.statusText);
+    setSelectionFromScan(data, state.selection);
+    setCreateFeedback("success", "背景音乐已加入", `当前素材集已包含 ${(data.audios || []).length} 个音频文件。`);
+    showToast("success", "背景音乐已加入", `${(data.audios || []).length} 个音频文件`);
+    log(`背景音乐已加入：${(data.audios || []).length} 个音频文件`);
+  } catch (error) {
+    setCreateFeedback("error", "追加背景音乐失败", error.message || "请重试。");
+    showToast("error", "追加背景音乐失败", error.message);
+    log(`追加背景音乐失败：${error.message}`);
+  } finally {
+    state.ui.uploadingMaterials = false;
+    setButtonLoading("pickAudioBtn", "正在追加音频...", false);
   }
 }
 
@@ -438,14 +560,10 @@ async function rescanSelection({ silent = false } = {}) {
   });
   setSelectionFromScan(data, state.selection);
   if (!silent) {
-    setCreateFeedback(
-      "success",
-      "重新扫描完成",
-      `${data.images.length} 张图片，${data.videos.length} 个视频，${data.image_groups.length} 组图片。`
-    );
+    setCreateFeedback("success", "重新扫描完成", `${data.images.length} 张图片，${data.videos.length} 个视频，${(data.audios || []).length} 个音频。`);
     showToast("success", "重新扫描完成");
   }
-  log(`重新扫描完成：${data.images.length} 张图片，${data.videos.length} 个视频`);
+  log(`重新扫描完成：${data.images.length} 张图片，${data.videos.length} 个视频，${(data.audios || []).length} 个音频`);
   return data;
 }
 
@@ -462,34 +580,22 @@ async function restoreLastSelection() {
 
 async function ensureScanMatchesGroupSize() {
   if (!state.scan) return null;
-  if (Number(state.scan.group_size) === getCurrentGroupSize()) {
-    return state.scan;
-  }
-  setCreateFeedback("info", "分组数已变更", `已改为 ${getCurrentGroupSize()} 张一组，正在重新分组。`);
+  if (Number(state.scan.group_size) === getCurrentGroupSize()) return state.scan;
+  setCreateFeedback("info", "分组数已变更", `当前改为 ${getCurrentGroupSize()} 张一组，正在重新分组。`);
   return rescanSelection();
 }
 
 function getTaskSourceItems() {
-  if (!state.scan) {
-    return [];
-  }
-
-  const publishType = getPublishType();
-  if (publishType === "video") {
-    if (getVideoSource() === "mix_from_images") {
-      return state.scan.image_groups || [];
-    }
-    return state.scan.video_items || [];
+  if (!state.scan) return [];
+  if (getPublishType() === "video") {
+    return getVideoSource() === "mix_from_images" ? (state.scan.image_groups || []) : (state.scan.video_items || []);
   }
   return state.scan.image_groups || [];
 }
 
 function getTaskValidationError() {
-  if (!state.scan) {
-    return "请先导入素材。";
-  }
-  const publishType = getPublishType();
-  if (publishType === "video") {
+  if (!state.scan) return "请先导入素材。";
+  if (getPublishType() === "video") {
     if (getVideoSource() === "mix_from_images" && !(state.scan.image_groups || []).length) {
       return "当前没有可用于混剪的视频图片组。";
     }
@@ -525,11 +631,9 @@ async function createJobs() {
     "info",
     `正在创建 ${sourceItems.length} 个任务`,
     publishType === "video"
-      ? (
-        videoSource === "mix_from_images"
-          ? `将把当前图片自动混剪成视频，效果：${$("mixed_video_effect").selectedOptions[0]?.textContent || "轻动效 + 淡入淡出"}。`
-          : "将直接用本地视频创建任务。"
-      )
+      ? (videoSource === "mix_from_images"
+        ? `将按 ${$("mixed_video_effect").selectedOptions[0]?.textContent || "当前效果"} 生成混剪视频。`
+        : "将直接用本地视频创建任务。")
       : `当前按 ${getCurrentGroupSize()} 张一组创建图集任务。`
   );
 
@@ -539,6 +643,9 @@ async function createJobs() {
       publish_type: publishType,
       video_source: videoSource,
       mixed_video_effect: getMixedVideoEffect(),
+      selected_audio_path: getSelectedAudioPath(),
+      selected_audio_start: getSelectedAudioStart(),
+      selected_audio_duration: getSelectedAudioDuration(),
       groups: state.scan.image_groups || [],
       video_items: state.scan.video_items || [],
       topic: $("topic").value.trim(),
@@ -633,6 +740,9 @@ function renderJobs() {
     const errorSummary = summarizeJobError(job);
     const kindLabel = materialKindLabel(job);
     const countLabel = materialCountLabel(job);
+    const normalizedStatus = normalizeStatus(job.status);
+    const canConfirm = normalizedStatus === "need_manual" || normalizedStatus === "submitted";
+    const canDelete = normalizedStatus !== "publishing";
     const row = document.createElement("tr");
     row.innerHTML = `
       <td><strong>${escapeHtml(job.id)}</strong><br><span class="muted">${escapeHtml(kindLabel)}</span></td>
@@ -647,6 +757,8 @@ function renderJobs() {
         <div class="row-actions">
           <button class="ghost" data-edit="${escapeHtml(job.id)}" type="button">编辑</button>
           <button data-publish="${escapeHtml(job.id)}" type="button">半自动发布</button>
+          <button class="ghost" data-confirm="${escapeHtml(job.id)}" type="button" ${canConfirm ? "" : "disabled"}>确认</button>
+          <button class="ghost danger" data-delete="${escapeHtml(job.id)}" type="button" ${canDelete ? "" : "disabled"}>删除</button>
         </div>
       </td>
     `;
@@ -690,6 +802,12 @@ function renderJobs() {
   tbody.querySelectorAll("[data-publish]").forEach((button) => {
     button.addEventListener("click", () => publishJob(button.dataset.publish));
   });
+  tbody.querySelectorAll("[data-confirm]").forEach((button) => {
+    button.addEventListener("click", () => confirmJob(button.dataset.confirm));
+  });
+  tbody.querySelectorAll("[data-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteJob(button.dataset.delete));
+  });
   tbody.querySelectorAll("[data-save-inline]").forEach((button) => {
     button.addEventListener("click", () => saveInlineJob(button.dataset.saveInline));
   });
@@ -702,9 +820,7 @@ function editJob(id) {
   state.editingJobId = state.editingJobId === id ? "" : id;
   renderJobs();
   const input = $("inlineEditTitle");
-  if (input) {
-    input.focus();
-  }
+  if (input) input.focus();
   log(`正在编辑任务 ${id}`);
 }
 
@@ -740,6 +856,30 @@ async function publishJob(id) {
   waitForPublishResult(id).catch((error) => {
     log(`任务 ${id} 状态轮询失败：${error.message}`);
   });
+}
+
+async function confirmJob(id) {
+  await api(`/api/jobs/${id}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  await loadJobs();
+  showToast("success", "任务已确认", id);
+  log(`任务 ${id} 已确认`);
+}
+
+async function deleteJob(id) {
+  if (!window.confirm(`确定删除任务 ${id} 吗？`)) return;
+  await api(`/api/jobs/${id}/delete`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  if (state.editingJobId === id) {
+    state.editingJobId = "";
+  }
+  await loadJobs();
+  showToast("success", "任务已删除", id);
+  log(`任务 ${id} 已删除`);
 }
 
 function clearInlineEditor() {
@@ -781,9 +921,16 @@ function bindEvents() {
     const value = $("deepseek_model_select").value;
     applyModelValue(value === "__custom__" ? $("deepseek_model").value.trim() : value);
   });
-  $("force_9x16_upload").addEventListener("change", update9x16ModeUi);
+  $("force_9x16_upload").addEventListener("change", () => {
+    update9x16ModeUi();
+    saveConfigQuietly();
+  });
+  $("force_9x16_mode").addEventListener("change", () => {
+    saveConfigQuietly();
+  });
   $("group_size").addEventListener("input", () => {
     updateCreateButtonLabel();
+    updateMixedVideoDurationHint();
     if (state.selection?.upload_dir) {
       setCreateFeedback("info", "分组数已修改", `当前改为 ${getCurrentGroupSize()} 张一组，创建任务前会自动重新分组。`);
     }
@@ -791,9 +938,13 @@ function bindEvents() {
   $("publish_type").addEventListener("change", updatePublishTypeUi);
   $("video_source").addEventListener("change", updatePublishTypeUi);
   $("mixed_video_effect").addEventListener("change", updatePublishTypeUi);
+  $("mixed_video_audio").addEventListener("change", updatePublishTypeUi);
+  $("mixed_video_audio_start").addEventListener("input", updatePublishTypeUi);
+  $("mixed_video_audio_duration").addEventListener("input", updatePublishTypeUi);
 
   $("pickFolderBtn").addEventListener("click", () => $("folderPicker").click());
   $("pickFilesBtn").addEventListener("click", () => $("filePicker").click());
+  $("pickAudioBtn").addEventListener("click", () => $("audioPicker").click());
 
   $("folderPicker").addEventListener("change", async (event) => {
     const files = Array.from(event.target.files || []);
@@ -807,6 +958,13 @@ function bindEvents() {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
     await uploadMaterials(files, `已选择 ${files.length} 个文件`);
+    event.target.value = "";
+  });
+
+  $("audioPicker").addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    await uploadAudioFiles(files);
     event.target.value = "";
   });
 

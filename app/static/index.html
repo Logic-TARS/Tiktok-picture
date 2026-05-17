@@ -123,8 +123,9 @@
 
         <section class="panel">
           <h2>素材</h2>
-          <input id="folderPicker" class="hidden" type="file" webkitdirectory multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v">
-          <input id="filePicker" class="hidden" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v">
+          <input id="folderPicker" class="hidden" type="file" webkitdirectory multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v,.mp3,.wav,.m4a,.aac,.flac,.ogg">
+          <input id="filePicker" class="hidden" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v,.mp3,.wav,.m4a,.aac,.flac,.ogg">
+          <input id="audioPicker" class="hidden" type="file" multiple accept=".mp3,.wav,.m4a,.aac,.flac,.ogg">
 
           <div class="mode-grid">
             <label>发布类型
@@ -148,10 +149,25 @@
               <option value="motion_fade">轻动效 + 淡入淡出</option>
             </select>
           </label>
+          <label id="mixed_video_audio_wrap" class="hidden">背景音乐
+            <select id="mixed_video_audio">
+              <option value="">自动选择第一首音频</option>
+            </select>
+          </label>
+          <div id="mixed_video_audio_clip_wrap" class="split hidden">
+            <label>起始秒数
+              <input id="mixed_video_audio_start" type="number" min="0" step="0.1" placeholder="如 12.5">
+            </label>
+            <label>片段时长
+              <input id="mixed_video_audio_duration" type="number" min="0" step="0.1" placeholder="如 8">
+            </label>
+          </div>
+          <div id="mixedVideoDurationHint" class="helper-text hidden"></div>
 
           <div class="picker-actions">
             <button id="pickFolderBtn" type="button">选择文件夹</button>
             <button id="pickFilesBtn" class="ghost" type="button">选择文件</button>
+            <button id="pickAudioBtn" class="ghost" type="button">选择背景音乐文件</button>
             <button id="restoreSelectionBtn" class="ghost hidden" type="button">恢复上次选择</button>
           </div>
           <div id="selectionSummary" class="selection-summary empty">还没有选择素材</div>

@@ -6,6 +6,7 @@ from typing import Any
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
 
 def scan_paths(raw_paths: list[str], group_size: int = 4) -> dict[str, Any]:
@@ -35,11 +36,15 @@ def scan_paths(raw_paths: list[str], group_size: int = 4) -> dict[str, Any]:
         [str(path.resolve()) for path in files if path.suffix.lower() in VIDEO_EXTENSIONS],
         key=lambda value: value.lower(),
     )
+    audios = sorted(
+        [str(path.resolve()) for path in files if path.suffix.lower() in AUDIO_EXTENSIONS],
+        key=lambda value: value.lower(),
+    )
     unsupported = sorted(
         [
             str(path.resolve())
             for path in files
-            if path.suffix.lower() not in IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+            if path.suffix.lower() not in IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
         ],
         key=lambda value: value.lower(),
     )
@@ -64,6 +69,7 @@ def scan_paths(raw_paths: list[str], group_size: int = 4) -> dict[str, Any]:
     return {
         "images": images,
         "videos": videos,
+        "audios": audios,
         "unsupported": unsupported,
         "groups": image_groups,
         "image_groups": image_groups,

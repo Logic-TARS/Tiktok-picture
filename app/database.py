@@ -157,6 +157,14 @@ def get_job(job_id: str) -> dict[str, Any]:
     return _row_to_job(row)
 
 
+def delete_job(job_id: str) -> dict[str, Any]:
+    init_db()
+    job = get_job(job_id)
+    with connect() as conn:
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    return job
+
+
 def update_job(job_id: str, **fields: Any) -> dict[str, Any]:
     init_db()
     allowed = {
