@@ -17,7 +17,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "deepseek_api_key": "",
     "deepseek_base_url": "https://api.deepseek.com",
     "deepseek_model": "deepseek-v4-flash",
+    "platform": "douyin",
     "creator_upload_url": "https://creator.douyin.com/creator-micro/content/upload",
+    "kuaishou_upload_url": "https://creator.kuaishou.com/upload",
+    "xiaohongshu_upload_url": "https://creator.xiaohongshu.com/publish/publish",
     "browser_path": "",
     "browser_profile_dir": str(DATA_DIR / "browser-profile"),
     "publish_mode": "semi_auto",
@@ -31,9 +34,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "force_9x16_mode": "blur_background",
     "mixed_video_effect": "motion_fade",
     "upload_selector": "input[type='file']",
-    "caption_selector": "",
+    "kuaishou_upload_selector": "input[type='file']",
+    "kuaishou_title_selector": "",
+    "kuaishou_caption_selector": "",
+    "xiaohongshu_upload_selector": "input[type='file']",
+    "xiaohongshu_title_selector": "",
+    "xiaohongshu_caption_selector": "",
     "title_selector": "",
+    "caption_selector": "",
 }
+
+PLATFORMS = {"douyin", "kuaishou", "xiaohongshu"}
+PLATFORM_HASHTAG_LIMITS = {
+    "douyin": 5,
+    "kuaishou": 5,
+    "xiaohongshu": 10,
+}
+
+
+def normalize_platform(value: Any) -> str:
+    platform = str(value or DEFAULT_CONFIG["platform"]).strip()
+    return platform if platform in PLATFORMS else DEFAULT_CONFIG["platform"]
+
+
+def hashtag_limit_for_platform(platform: str) -> int:
+    return PLATFORM_HASHTAG_LIMITS.get(normalize_platform(platform), 5)
 
 
 def ensure_data_dirs() -> None:
@@ -101,18 +126,34 @@ def load_config() -> dict[str, Any]:
         "DEEPSEEK_API_KEY": "deepseek_api_key",
         "DEEPSEEK_BASE_URL": "deepseek_base_url",
         "DEEPSEEK_MODEL": "deepseek_model",
+        "PLATFORM": "platform",
         "DOUYIN_CREATOR_UPLOAD_URL": "creator_upload_url",
+        "KUAISHOU_CREATOR_UPLOAD_URL": "kuaishou_upload_url",
+        "XIAOHONGSHU_CREATOR_UPLOAD_URL": "xiaohongshu_upload_url",
         "BROWSER_PATH": "browser_path",
         "BROWSER_PROFILE_DIR": "browser_profile_dir",
         "UPLOAD_SELECTOR": "upload_selector",
         "TITLE_SELECTOR": "title_selector",
         "CAPTION_SELECTOR": "caption_selector",
+        "KUAISHOU_UPLOAD_SELECTOR": "kuaishou_upload_selector",
+        "KUAISHOU_TITLE_SELECTOR": "kuaishou_title_selector",
+        "KUAISHOU_CAPTION_SELECTOR": "kuaishou_caption_selector",
+        "XIAOHONGSHU_UPLOAD_SELECTOR": "xiaohongshu_upload_selector",
+        "XIAOHONGSHU_TITLE_SELECTOR": "xiaohongshu_title_selector",
+        "XIAOHONGSHU_CAPTION_SELECTOR": "xiaohongshu_caption_selector",
     }
     for env_name, key in env_map.items():
         value = os.getenv(env_name)
         if value:
             config[key] = value
-    config["hashtags_count"] = max(1, min(5, int(config.get("hashtags_count") or DEFAULT_CONFIG["hashtags_count"])))
+    config["platform"] = normalize_platform(config.get("platform"))
+    config["hashtags_count"] = max(
+        1,
+        min(
+            hashtag_limit_for_platform(config["platform"]),
+            int(config.get("hashtags_count") or DEFAULT_CONFIG["hashtags_count"]),
+        ),
+    )
     return config
 
 
@@ -122,10 +163,13 @@ def save_config(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = set(DEFAULT_CONFIG)
     for key, value in payload.items():
         if key in allowed:
+            if key == "platform":
+                value = normalize_platform(value)
             if key == "group_size":
                 value = max(1, int(value or DEFAULT_CONFIG[key]))
             if key == "hashtags_count":
-                value = max(1, min(5, int(value or DEFAULT_CONFIG[key])))
+                platform = normalize_platform(payload.get("platform") or current.get("platform"))
+                value = max(1, min(hashtag_limit_for_platform(platform), int(value or DEFAULT_CONFIG[key])))
             if key == "publish_interval_seconds":
                 value = max(0, int(value or DEFAULT_CONFIG[key]))
             if key == "force_9x16_upload":

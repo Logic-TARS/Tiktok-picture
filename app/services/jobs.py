@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app import database
-from app.config import DATA_DIR, load_config
+from app.config import DATA_DIR, hashtag_limit_for_platform, load_config, normalize_platform
 from app.deepseek_client import generate_caption
 from app.logger import get_logger
 from app.media.image_9x16 import BLUR_BACKGROUND
@@ -16,14 +16,23 @@ from app.media.video_mixer import (
     normalize_audio_start_seconds,
     normalize_effect_mode,
 )
-from app.publisher.douyin import publish_to_creator
+from app.publisher.douyin import publish_to_creator as douyin_publish
+from app.publisher.kuaishou import publish_to_creator as kuaishou_publish
+from app.publisher.xiaohongshu import publish_to_creator as xiaohongshu_publish
 
 LOGGER = get_logger("app.services.jobs")
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
+PUBLISHERS = {
+    "douyin": douyin_publish,
+    "kuaishou": kuaishou_publish,
+    "xiaohongshu": xiaohongshu_publish,
+}
+
 
 def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
     config = load_config()
+    platform = normalize_platform(payload.get("platform") or config.get("platform"))
     topic = payload.get("topic") or config.get("topic")
     style = payload.get("style") or config.get("caption_style")
     account_position = payload.get("account_position") or config.get("account_position")
@@ -31,7 +40,10 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
     banned_words = payload.get("banned_words", "")
     auto_caption = bool(payload.get("auto_caption", True))
     replace_existing = bool(payload.get("replace_existing", True))
-    hashtags_count = min(int(config.get("hashtags_count", 5) or 5), 5)
+    hashtags_count = min(
+        int(payload.get("hashtags_count") or config.get("hashtags_count", 5) or 5),
+        hashtag_limit_for_platform(platform),
+    )
     publish_type = str(payload.get("publish_type") or "image_gallery").strip() or "image_gallery"
     video_source = str(payload.get("video_source") or "direct_video").strip() or "direct_video"
     mixed_video_effect = normalize_effect_mode(payload.get("mixed_video_effect") or config.get("mixed_video_effect"))
@@ -46,6 +58,8 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
             LOGGER.info("Removed %s existing draft jobs before rebuild", replaced_count)
 
     if publish_type == "video":
+        if platform == "xiaohongshu":
+            raise RuntimeError("小红书视频发布暂未支持，请先选择图集发布。")
         video_items = payload.get("video_items") or []
         groups = payload.get("groups") or []
         selected_audio_path = str(payload.get("selected_audio_path") or "").strip()
@@ -67,6 +81,7 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
                 auto_caption=auto_caption,
                 effect_mode=mixed_video_effect,
                 frame_mode=mixed_video_frame_mode,
+                platform=platform,
             )
         else:
             created = _create_direct_video_jobs(
@@ -79,6 +94,7 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
                 banned_words=banned_words,
                 hashtags_count=hashtags_count,
                 auto_caption=auto_caption,
+                platform=platform,
             )
         return {"jobs": created, "replaced_count": replaced_count}
 
@@ -98,6 +114,7 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
             auto_caption=auto_caption,
             group_index=index,
             material_count=len(paths),
+            platform=platform,
         )
         job = database.create_job(
             paths,
@@ -107,6 +124,7 @@ def create_gallery_jobs(payload: dict[str, Any]) -> dict[str, Any]:
             material_type="image_gallery",
             publish_mode="semi_auto",
             status="pending",
+            platform=platform,
         )
         created.append(job)
         LOGGER.info("Created image gallery job %s with %s images", job["id"], len(paths))
@@ -124,6 +142,7 @@ def _create_direct_video_jobs(
     banned_words: str,
     hashtags_count: int,
     auto_caption: bool,
+    platform: str = "douyin",
 ) -> list[dict[str, Any]]:
     created: list[dict[str, Any]] = []
     for index, item in enumerate(video_items, start=1):
@@ -141,6 +160,7 @@ def _create_direct_video_jobs(
             auto_caption=auto_caption,
             group_index=index,
             material_count=len(paths),
+            platform=platform,
         )
         job = database.create_job(
             paths,
@@ -150,6 +170,7 @@ def _create_direct_video_jobs(
             material_type="video",
             publish_mode="semi_auto",
             status="pending",
+            platform=platform,
         )
         created.append(job)
         LOGGER.info("Created direct video job %s with %s file(s)", job["id"], len(paths))
@@ -172,6 +193,7 @@ def _create_mixed_video_jobs(
     auto_caption: bool,
     effect_mode: str,
     frame_mode: str,
+    platform: str = "douyin",
 ) -> list[dict[str, Any]]:
     created: list[dict[str, Any]] = []
     outputs_dir = DATA_DIR / "outputs"
@@ -203,6 +225,7 @@ def _create_mixed_video_jobs(
             auto_caption=auto_caption,
             group_index=index,
             material_count=len(paths),
+            platform=platform,
         )
         job = database.create_job(
             [mixed_video_path],
@@ -213,6 +236,7 @@ def _create_mixed_video_jobs(
             cover_path=str(paths[0]) if paths else "",
             publish_mode="semi_auto",
             status="pending",
+            platform=platform,
         )
         created.append(job)
         LOGGER.info(
@@ -273,6 +297,7 @@ def _build_caption(
     auto_caption: bool,
     group_index: int,
     material_count: int,
+    platform: str = "douyin",
 ) -> dict[str, Any]:
     if not auto_caption:
         return {"title": "", "body": "", "hashtags": []}
@@ -281,6 +306,7 @@ def _build_caption(
     return generate_caption(
         config,
         {
+            "platform": platform,
             "topic": topic,
             "style": style,
             "account_position": account_position,
@@ -305,14 +331,18 @@ def _publish_worker(job_id: str) -> None:
     config = load_config()
     try:
         job = database.get_job(job_id)
-        result = publish_to_creator(job, config)
+        platform = normalize_platform(job.get("platform", "douyin"))
+        if platform not in PUBLISHERS:
+            raise RuntimeError(f"Unsupported publishing platform: {platform}")
+        publisher = PUBLISHERS[platform]
+        result = publisher(job, config)
         updated = database.update_job(
             job_id,
             status=result.get("status", "need_manual"),
             error_message=result.get("message", ""),
         )
         database.add_publish_record(updated, updated["status"], updated.get("error_message", ""))
-        LOGGER.info("Publish finished for job %s with status %s", job_id, updated["status"])
+        LOGGER.info("Publish finished for job %s on platform %s with status %s", job_id, platform, updated["status"])
     except Exception as exc:
         LOGGER.exception("Publish failed for job %s", job_id)
         try:

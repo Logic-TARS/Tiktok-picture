@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Douyin (Chinese TikTok) semi-automated publishing tool for anime/2D image galleries. Local web app: scan images → DeepSeek generates captions → Playwright opens Douyin creator page with pre-filled form (user manually clicks publish).
+Multi-platform (抖音/快手/小红书) semi-automated publishing tool for anime/2D image galleries. Local web app: scan images → DeepSeek generates per-platform captions → Playwright opens the creator page with pre-filled form (user manually clicks publish).
 
 ## Commands
 
@@ -28,53 +28,57 @@ python -m playwright install chromium
 ```
 app/
 ├── main.py              # HTTP server on :8765 (ThreadingHTTPServer, no framework)
-├── config.py            # Config: .env → env.txt → data/config.json → env vars
+├── config.py            # Config: defaults → data/config.json → .env / env.txt → env vars
 ├── database.py          # SQLite (jobs, publish_records, settings tables)
 ├── logger.py            # Rotating file + console logger
-├── deepseek_client.py   # DeepSeek AI caption generation (urllib, no SDK)
+├── deepseek_client.py   # DeepSeek caption generation with per-platform prompts
 ├── media/
 │   ├── scanner.py       # Recursive directory scan for images/videos/audio
 │   ├── uploads.py       # File upload → data/uploads/{id}/
-│   ├── image_9x16.py    # PIL-based resize to 1080×1920 (blur or crop)
+│   ├── image_9x16.py    # PIL-based resize with platform-specific target sizes
 │   └── video_mixer.py   # FFmpeg image slideshow → video with effects
 ├── services/
-│   └── jobs.py          # Job creation & async publish orchestration
+│   └── jobs.py          # Job creation & async publish orchestration (platform dispatch)
 ├── publisher/
-│   └── douyin.py        # Playwright browser automation for Douyin upload
+│   ├── douyin.py        # Playwright automation for 抖音
+│   ├── kuaishou.py      # Playwright automation for 快手
+│   └── xiaohongshu.py   # Playwright automation for 小红书
 └── static/              # Web UI (Chinese): index.html, app.js, styles.css
 ```
 
 ### Key Design Decisions
 
-- **Semi-automated only**: Browser automation fills forms but does NOT click final publish (stops at confirmation page for manual review)
-- **No web framework**: Uses stdlib `http.server` (ThreadingHTTPServer), not Flask/FastAPI
+- **Semi-automated only**: Browser automation fills forms but does NOT click final publish
+- **No web framework**: Uses stdlib `http.server` (ThreadingHTTPServer)
 - **No DeepSeek SDK**: Uses raw `urllib.request` for API calls
 - **No test files**: Project has no test suite
-- **Config cascade**: defaults → `data/config.json` → `.env` / `env.txt` injected into environment → process environment overrides (in `app/config.py`)
+- **Config cascade**: defaults → `data/config.json` → `.env` / `env.txt` → process environment overrides
 - **Job status flow**: `pending` → `captioning` → `publishing` → `need_manual` → `submitted` / `published` / `failed`
-- **Captions**: DeepSeek generates title (≤20 chars), body, hashtags (≤5), comment_prompt; falls back to local templates if no API key
+- **Captions per platform**: DeepSeek prompts differ by platform (title length, hashtags count, tone)
+- **Image sizes per platform**: douyin=9:16, kuaishou=9:16, xiaohongshu=3:4
 
 ### Database (SQLite, `data/app.db`)
 
-- **jobs**: id, material_type (`image_gallery`|`video`), material_paths (JSON), title, body, hashtags (JSON), status, error_message, douyin_url, timestamps
+- **jobs**: id, material_type, material_paths (JSON), title, body, hashtags (JSON), **platform** (douyin/kuaishou/xiaohongshu), status, error_message, douyin_url, timestamps
 - **publish_records**: Audit log of publish attempts
 - **settings**: Key-value store
 
+### Platform Support
+
+| Platform  | URL resolution          | Title max | Hashtags max | Image ratio |
+|-----------|------------------------|-----------|-------------|-------------|
+| douyin    | 1080×1920 (9:16)       | 20 chars  | 5           | 9:16        |
+| kuaishou  | 1080×1920 (9:16)       | 25 chars  | 5           | 9:16        |
+| xiaohongshu | 720×960 (3:4)        | 20 chars  | 10          | 3:4         |
+
+Publishers share the same function signature: `publish_to_creator(job, config) -> dict`.
+Dispatch is via `PUBLISHERS` dict in `services/jobs.py`.
+
 ### Dependencies
 
-- `playwright>=1.44.0` — browser automation (only needed for "半自动发布")
+- `playwright>=1.44.0` — browser automation
 - `Pillow>=10.3.0` — image processing
-- FFmpeg — video mixing (optional, conda-installed)
-
-### Playwright Publishing Flow
-
-1. Launches Chromium with persistent profile (`data/browser-profile/`)
-2. Opens Douyin creator upload page
-3. Switches to image or video tab
-4. Uploads files via file input selector
-5. Fills title/caption via JS or selector
-6. Auto-selects suggested music
-7. Leaves browser open — user clicks publish manually
+- FFmpeg — video mixing (optional)
 
 ### File Paths
 

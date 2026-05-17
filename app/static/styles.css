@@ -494,7 +494,7 @@ button.wide {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 860px;
+  min-width: 920px;
 }
 
 th,
@@ -539,6 +539,31 @@ td {
 .status.publishing {
   background: #dff4ff;
   color: #175cd3;
+}
+
+.platform-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.platform-badge.douyin {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.platform-badge.kuaishou {
+  background: #fff0e6;
+  color: #d45200;
+}
+
+.platform-badge.xiaohongshu {
+  background: #ffe8ec;
+  color: #d42a4a;
 }
 
 .job-detail {

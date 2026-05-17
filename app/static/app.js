@@ -9,10 +9,19 @@ const presetModels = [
   "deepseek-reasoner",
 ];
 
+const platformHashtagLimits = {
+  douyin: 5,
+  kuaishou: 5,
+  xiaohongshu: 10,
+};
+
 const fields = [
   "deepseek_api_key",
   "deepseek_base_url",
+  "platform",
   "creator_upload_url",
+  "kuaishou_upload_url",
+  "xiaohongshu_upload_url",
   "browser_profile_dir",
   "browser_path",
   "group_size",
@@ -21,6 +30,12 @@ const fields = [
   "force_9x16_mode",
   "mixed_video_effect",
   "upload_selector",
+  "kuaishou_upload_selector",
+  "kuaishou_title_selector",
+  "kuaishou_caption_selector",
+  "xiaohongshu_upload_selector",
+  "xiaohongshu_title_selector",
+  "xiaohongshu_caption_selector",
   "title_selector",
   "caption_selector",
   "topic",
@@ -162,6 +177,15 @@ function materialKindLabel(job) {
   return job.material_type || "未知类型";
 }
 
+function platformLabel(platform) {
+  const mapping = {
+    douyin: "抖音",
+    kuaishou: "快手",
+    xiaohongshu: "小红书",
+  };
+  return mapping[platform] || platform || "抖音";
+}
+
 function materialCountLabel(job) {
   if ((job.material_type || "") === "image_gallery") {
     return `${(job.material_paths || []).length} 张图`;
@@ -198,6 +222,14 @@ function getCurrentGroupSize() {
 
 function getPublishType() {
   return $("publish_type").value;
+}
+
+function getSelectedPlatform() {
+  return $("platform")?.value || "douyin";
+}
+
+function getPlatformHashtagLimit(platform = getSelectedPlatform()) {
+  return platformHashtagLimits[platform] || 5;
 }
 
 function getVideoSource() {
@@ -301,10 +333,23 @@ function updateCreateButtonLabel() {
 function updatePublishTypeUi() {
   const videoMode = getPublishType() === "video";
   $("video_source_wrap").classList.toggle("hidden", !videoMode);
+  const xiaohongshuVideo = getSelectedPlatform() === "xiaohongshu" && videoMode;
+  if (xiaohongshuVideo) {
+    setCreateFeedback("warning", "小红书暂不支持视频任务", "请切换为图集发布，或选择抖音/快手发布视频。");
+  }
   updateMixedVideoUi();
   renderMixedVideoAudioOptions();
   updateCreateButtonLabel();
   renderScan();
+}
+
+function updatePlatformUi() {
+  const limit = getPlatformHashtagLimit();
+  $("hashtags_count").max = String(limit);
+  if (Number($("hashtags_count").value || 0) > limit) {
+    $("hashtags_count").value = String(limit);
+  }
+  updatePublishTypeUi();
 }
 
 function saveSelectionMemory(selection) {
@@ -426,7 +471,7 @@ async function loadConfig() {
   }
   applyModelValue(state.config.deepseek_model || "deepseek-v4-flash");
   update9x16ModeUi();
-  updatePublishTypeUi();
+  updatePlatformUi();
 }
 
 async function saveConfig() {
@@ -451,10 +496,10 @@ async function saveConfig() {
 async function saveConfigQuietly() {
   try {
     await saveConfig();
-    showToast("success", "9:16 配置已生效");
+    showToast("success", "配置已生效");
   } catch (error) {
-    showToast("error", "保存 9:16 配置失败", error.message);
-    log(`保存 9:16 配置失败：${error.message}`);
+    showToast("error", "保存配置失败", error.message);
+    log(`保存配置失败：${error.message}`);
   }
 }
 
@@ -595,6 +640,9 @@ function getTaskSourceItems() {
 
 function getTaskValidationError() {
   if (!state.scan) return "请先导入素材。";
+  if (getSelectedPlatform() === "xiaohongshu" && getPublishType() === "video") {
+    return "小红书视频发布暂未支持，请选择图集发布。";
+  }
   if (getPublishType() === "video") {
     if (getVideoSource() === "mix_from_images" && !(state.scan.image_groups || []).length) {
       return "当前没有可用于混剪的视频图片组。";
@@ -648,11 +696,13 @@ async function createJobs() {
       selected_audio_duration: getSelectedAudioDuration(),
       groups: state.scan.image_groups || [],
       video_items: state.scan.video_items || [],
+      platform: getSelectedPlatform(),
       topic: $("topic").value.trim(),
       style: $("caption_style").value,
       account_position: $("account_position").value.trim(),
       keywords: $("keywords").value.trim(),
       banned_words: $("banned_words").value.trim(),
+      hashtags_count: Math.min(getPlatformHashtagLimit(), Number($("hashtags_count").value || 5)),
       auto_caption: true,
       replace_existing: true,
     };
@@ -685,12 +735,13 @@ async function testCaption() {
   const data = await api("/api/captions/generate", {
     method: "POST",
     body: JSON.stringify({
+      platform: getSelectedPlatform(),
       topic: $("topic").value.trim(),
       style: $("caption_style").value,
       account_position: $("account_position").value.trim(),
       keywords: $("keywords").value.trim(),
       banned_words: $("banned_words").value.trim(),
-      hashtags_count: Math.min(5, Number($("hashtags_count").value || 5)),
+      hashtags_count: Math.min(getPlatformHashtagLimit(), Number($("hashtags_count").value || 5)),
       group_index: 1,
       material_count: getPublishType() === "video" ? 1 : getCurrentGroupSize(),
     }),
@@ -731,7 +782,7 @@ function renderJobs() {
   tbody.innerHTML = "";
   if (!state.jobs.length) {
     const row = document.createElement("tr");
-    row.innerHTML = `<td colspan="6" class="muted">暂无任务</td>`;
+    row.innerHTML = `<td colspan="7" class="muted">暂无任务</td>`;
     tbody.appendChild(row);
     return;
   }
@@ -746,6 +797,7 @@ function renderJobs() {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td><strong>${escapeHtml(job.id)}</strong><br><span class="muted">${escapeHtml(kindLabel)}</span></td>
+      <td><span class="platform-badge ${escapeHtml(job.platform || "douyin")}">${escapeHtml(platformLabel(job.platform))}</span></td>
       <td>${escapeHtml(countLabel)}</td>
       <td>
         <div>${escapeHtml(job.title || "未生成")}</div>
@@ -768,11 +820,11 @@ function renderJobs() {
       const editorRow = document.createElement("tr");
       editorRow.className = "inline-editor-row";
       editorRow.innerHTML = `
-        <td colspan="6">
+        <td colspan="7">
           <div class="inline-editor">
             <div class="inline-editor-head">
               <strong>编辑任务 ${escapeHtml(job.id)}</strong>
-              <span>最多 5 个话题</span>
+              <span>最多 ${getPlatformHashtagLimit(job.platform)} 个话题</span>
             </div>
             <div class="inline-editor-grid">
               <label>标题
@@ -825,11 +877,13 @@ function editJob(id) {
 }
 
 async function saveInlineJob(id) {
+  const job = state.jobs.find((item) => item.id === id);
+  const hashtagLimit = getPlatformHashtagLimit(job?.platform);
   const hashtags = $("inlineEditHashtags").value
     .split(/[\s,，]+/)
     .map((item) => item.trim())
     .filter(Boolean)
-    .slice(0, 5);
+    .slice(0, hashtagLimit);
 
   await api(`/api/jobs/${id}`, {
     method: "POST",
@@ -923,6 +977,10 @@ function bindEvents() {
   });
   $("force_9x16_upload").addEventListener("change", () => {
     update9x16ModeUi();
+    saveConfigQuietly();
+  });
+  $("platform").addEventListener("change", () => {
+    updatePlatformUi();
     saveConfigQuietly();
   });
   $("force_9x16_mode").addEventListener("change", () => {

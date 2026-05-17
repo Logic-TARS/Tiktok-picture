@@ -37,6 +37,7 @@ def init_db() -> None:
                 title TEXT DEFAULT '',
                 body TEXT DEFAULT '',
                 hashtags TEXT DEFAULT '[]',
+                platform TEXT NOT NULL DEFAULT 'douyin',
                 status TEXT NOT NULL,
                 publish_mode TEXT NOT NULL,
                 error_message TEXT DEFAULT '',
@@ -46,6 +47,7 @@ def init_db() -> None:
             )
             """
         )
+        ensure_column(conn, "jobs", "platform", "TEXT NOT NULL DEFAULT 'douyin'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS publish_records (
@@ -55,6 +57,7 @@ def init_db() -> None:
                 material_paths TEXT NOT NULL,
                 cover_path TEXT DEFAULT '',
                 caption_text TEXT NOT NULL,
+                platform TEXT NOT NULL DEFAULT 'douyin',
                 status TEXT NOT NULL,
                 published_at TEXT,
                 douyin_url TEXT DEFAULT '',
@@ -63,6 +66,7 @@ def init_db() -> None:
             )
             """
         )
+        ensure_column(conn, "publish_records", "platform", "TEXT NOT NULL DEFAULT 'douyin'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -72,6 +76,13 @@ def init_db() -> None:
             )
             """
         )
+
+
+def ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(row["name"] == column for row in rows):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
@@ -91,6 +102,7 @@ def create_job(
     cover_path: str = "",
     publish_mode: str = "semi_auto",
     status: str = "pending",
+    platform: str = "douyin",
 ) -> dict[str, Any]:
     init_db()
     job_id = uuid.uuid4().hex[:12]
@@ -100,9 +112,9 @@ def create_job(
             """
             INSERT INTO jobs (
                 id, material_type, material_paths, cover_path, title, body, hashtags,
-                status, publish_mode, error_message, douyin_url, created_at, updated_at
+                platform, status, publish_mode, error_message, douyin_url, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
             """,
             (
                 job_id,
@@ -112,6 +124,7 @@ def create_job(
                 title,
                 body,
                 json.dumps(hashtags or [], ensure_ascii=False),
+                platform,
                 status,
                 publish_mode,
                 created_at,
@@ -172,6 +185,7 @@ def update_job(job_id: str, **fields: Any) -> dict[str, Any]:
         "title",
         "body",
         "hashtags",
+        "platform",
         "status",
         "publish_mode",
         "error_message",
@@ -202,9 +216,9 @@ def add_publish_record(job: dict[str, Any], status: str, error_message: str = ""
             """
             INSERT INTO publish_records (
                 id, job_id, material_type, material_paths, cover_path, caption_text,
-                status, published_at, douyin_url, error_message, created_at
+                platform, status, published_at, douyin_url, error_message, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record_id,
@@ -213,6 +227,7 @@ def add_publish_record(job: dict[str, Any], status: str, error_message: str = ""
                 json.dumps(job["material_paths"], ensure_ascii=False),
                 job.get("cover_path", ""),
                 caption,
+                job.get("platform", "douyin"),
                 status,
                 now_iso() if status in {"submitted", "need_manual"} else None,
                 job.get("douyin_url", ""),
